@@ -44,10 +44,10 @@
 ## 🏗️ Architecture
 
 ```
-                         ┌─────────────────────────────────────────┐
-                         │              server.py                  │
-  User Message ────────► │                                         │
-                         │   Is casual? ──YES──► LLM direct reply  │
+                         ┌──────────────────────────────────────────┐
+                         │              server.py                   │
+  User Message ────────► │                                          │
+                         │   Is casual? ──YES──► LLM direct reply   │
                          │       │                                  │
                          │      NO                                  │
                          │       │                                  │
@@ -55,30 +55,30 @@
                          │  query (history-aware rewrite)           │
                          │       │                                  │
                          │       ▼                                  │
-                         │ ┌──────────────────────────────────┐    │
-                         │ │         retrieval.py             │    │
-                         │ │                                  │    │
-                         │ │  MultiQuery ──► [q1, q2, q3]    │    │
-                         │ │                    │             │    │
-                         │ │         ┌──────────┴─────────┐  │    │
-                         │ │   Chroma Dense          BM25  │  │    │
-                         │ │  (Qwen3 vectors)   (keywords) │  │    │
-                         │ │         └──────────┬─────────┘  │    │
-                         │ │        EnsembleRetriever (RRF)   │    │
-                         │ │                    │             │    │
-                         │ │      CrossEncoderReranker        │    │
-                         │ │         (top 5 passages)         │    │
-                         │ └──────────────┬───────────────────┘    │
-                         │               │                         │
-                         │               ▼                         │
-                         │ ┌──────────────────────────────────┐    │
-                         │ │         grounding.py             │    │
-                         │ │  Format [1]..[5] → Prompt → LLM │    │
-                         │ │  → is_grounded() verification    │    │
-                         │ └──────────────────────────────────┘    │
-                         │               │                         │
-                         │     SSE stream ──► Browser              │
-                         └─────────────────────────────────────────┘
+                         │ ┌──────────────────────────────────┐     │
+                         │ │         retrieval.py             │     │
+                         │ │                                  │     │
+                         │ │  MultiQuery ──► [q1, q2, q3]     │     │
+                         │ │                    │             │     │
+                         │ │         ┌──────────┴─────────┐   │     │
+                         │ │   Chroma Dense          BM25 │   │     │
+                         │ │  (Qwen3 vectors)   (keywords)│   │     │
+                         │ │         └──────────┬─────────┘   │     │
+                         │ │        EnsembleRetriever (RRF)   │     │
+                         │ │                    │             │     │
+                         │ │      CrossEncoderReranker        │     │
+                         │ │         (top 5 passages)         │     │
+                         │ └──────────────┬───────────────────┘     │
+                         │               │                          │
+                         │               ▼                          │
+                         │ ┌──────────────────────────────────┐     │
+                         │ │         grounding.py             │     │
+                         │ │  Format [1]..[5] → Prompt → LLM  │     │
+                         │ │  → is_grounded() verification    │     │
+                         │ └──────────────────────────────────┘     │
+                         │               │                          │
+                         │     SSE stream ──► Browser               │
+                         └──────────────────────────────────────────┘
 ```
 
 ---
