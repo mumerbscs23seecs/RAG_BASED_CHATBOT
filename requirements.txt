@@ -8,7 +8,9 @@ langchain-core
 langchain-text-splitters
 langchain-openai
 langchain-chroma
+langchain-classic
 chromadb
 sentence-transformers
 rank-bm25
 pypdf
+scikit-learn
