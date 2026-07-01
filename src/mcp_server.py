@@ -58,8 +58,10 @@ def get_weather(city: str) -> str:
 @mcp.tool()
 async def retrieve_documents(query: str) -> str:
     """
-    Search and retrieve relevant passages from the uploaded documents.
-    Use this when the user asks a question that requires looking up information from documents.
+    Search and retrieve relevant passages from uploaded documents.
+    Use this for any document question including: specific facts, author names, numbers,
+    dates, definitions, short answers, advice based on documents, or evaluations —
+    anything that does NOT require a full summary or multi-section comparison.
     """
     docs = await _retriever.ainvoke(query)
     if not docs:

@@ -73,9 +73,11 @@ async def lifespan(app: FastAPI):
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
 _RAG_CHECK_SYSTEM = (
-    "Does the user's message require deep document analysis such as: "
-    "summarizing a document, comparing multiple sections, multi-part questions, "
-    "or questions needing strict citation-based answers from uploaded documents? "
+    "Reply YES only if the question requires reading MULTIPLE sections of a document "
+    "AND producing a long structured answer — such as a full summary, a comparison "
+    "between sections, or a detailed multi-part analysis. "
+    "Reply NO for: single facts, author names, numbers, dates, definitions, "
+    "short answers, advice, evaluations, or anything answerable from one passage. "
     "Reply with YES or NO only."
 )
 
