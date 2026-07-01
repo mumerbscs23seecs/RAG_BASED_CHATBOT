@@ -24,7 +24,7 @@ from langchain_classic.retrievers import EnsembleRetriever, ContextualCompressio
 from langchain_classic.retrievers.document_compressors import CrossEncoderReranker
 from langchain_classic.retrievers.multi_query import MultiQueryRetriever
 
-from embeddings import Qwen3Embeddings
+from embeddings import DocumentEmbeddings
 
 from pathlib import Path
 _ROOT = Path(__file__).parent.parent
@@ -36,7 +36,7 @@ FETCH_K = 15   # each retriever over-fetches this many
 TOP_K = 5      # kept after the reranker
 
 # Load once at import. These are expensive to build.
-_emb = Qwen3Embeddings()
+_emb = DocumentEmbeddings()
 _store = Chroma(collection_name="pdfs", embedding_function=_emb, persist_directory=PERSIST_DIR)
 
 try:

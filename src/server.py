@@ -1,14 +1,16 @@
 """
 server.py - Route -> Retrieve -> Condense -> Ground -> Stream -> Verify.
 
-Router: one cheap LLM call decides if the message needs document retrieval.
-  YES  -> full RAG pipeline (condense -> retrieve -> ground -> verify)
-  NO   -> LLM answers directly from conversation history (greetings, jokes, general chat)
+Two paths:
+  RAG          -> deep document questions (condense -> retrieve -> ground -> verify)
+  Tool binding -> LLM picks from MCP tools loaded from mcp_server.py at startup
 """
 
 import json
 import os
 import re
+from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional, AsyncGenerator
 
 from dotenv import load_dotenv
@@ -18,8 +20,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_core.output_parsers import StrOutputParser
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from retrieval import build_retriever
 from grounding import GROUNDED_PROMPT, REFUSAL, format_context, is_grounded
@@ -40,21 +43,42 @@ llm = ChatOpenAI(
 
 DEFAULT_RETRIEVER = build_retriever(llm=llm, use_multiquery=True)
 
-app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"],
-                   allow_methods=["*"], allow_headers=["*"])
+_MCP_SERVER_PATH = str(Path(__file__).parent / "mcp_server.py")
 
-# Router: classify whether the message needs document retrieval
-_ROUTER_SYSTEM = (
-    "Decide whether answering the user's message requires searching their uploaded documents. "
-    "Reply with exactly one word — YES or NO.\n\n"
-    "Say NO for: greetings, casual conversation, jokes, general knowledge questions, "
-    "questions about yourself, anything that doesn't need the user's specific documents.\n"
-    "Say YES for: questions about content in the user's documents, specific facts, "
-    "summaries, comparisons, or anything that requires looking up uploaded material."
+# Set during lifespan startup when MCP server connects
+_llm_with_tools = None
+_tool_map: dict = {}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Connect to MCP server subprocess, load its tools, bind to LLM."""
+    global _llm_with_tools, _tool_map
+
+    mcp_client = MultiServerMCPClient(
+        {
+            "rag-chatbot-tools": {
+                "command": "python",
+                "args": [_MCP_SERVER_PATH],
+                "transport": "stdio",
+            }
+        }
+    )
+    tools = await mcp_client.get_tools()
+    _llm_with_tools = llm.bind_tools(tools)
+    _tool_map = {t.name: t for t in tools}
+    yield
+
+
+# ── Prompts ───────────────────────────────────────────────────────────────────
+
+_RAG_CHECK_SYSTEM = (
+    "Does the user's message require deep document analysis such as: "
+    "summarizing a document, comparing multiple sections, multi-part questions, "
+    "or questions needing strict citation-based answers from uploaded documents? "
+    "Reply with YES or NO only."
 )
 
-# Used when the router says NO — answer directly without any RAG
 _DIRECT_SYSTEM = (
     "You are Auralis, a helpful AI assistant for document Q&A. "
     "Respond naturally and helpfully."
@@ -68,6 +92,12 @@ _CONDENSE_SYSTEM = (
 )
 
 _CITATION_RE = re.compile(r'\[\d+\]')
+
+# ── FastAPI ───────────────────────────────────────────────────────────────────
+
+app = FastAPI(lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"],
+                   allow_methods=["*"], allow_headers=["*"])
 
 
 class HistoryMessage(BaseModel):
@@ -107,56 +137,76 @@ async def chat(req: ChatRequest):
         try:
             history = _to_lc_messages(req.history)
 
-            # Router: one cheap call to decide if retrieval is needed
-            router_resp = await llm.ainvoke([
-                SystemMessage(content=_ROUTER_SYSTEM),
+            # Step 1: Check if this needs the full RAG pipeline (deep analysis)
+            rag_check = await llm.ainvoke([
+                SystemMessage(content=_RAG_CHECK_SYSTEM),
                 HumanMessage(content=req.message),
             ])
-            needs_docs = "YES" in router_resp.content.strip().upper()
 
-            if not needs_docs:
-                # Direct conversational reply — no retrieval, no grounding check
+            if "YES" in rag_check.content.strip().upper():
+                print(f"\n[ROUTER] → RAG  | query: {req.message!r}")
+                # ── RAG: deep document questions ──────────────────────────────
+                query = req.message
+                if history:
+                    try:
+                        result = await llm.ainvoke([
+                            SystemMessage(content=_CONDENSE_SYSTEM),
+                            *history,
+                            HumanMessage(content=req.message),
+                        ])
+                        query = result.content.strip() or req.message
+                    except Exception:
+                        query = req.message
+
+                docs = await retriever.ainvoke(query)
+                context = format_context(docs) if docs else ""
+                sources = sorted({d.metadata.get("source", "?") for d in docs}) if docs else []
+
+                chain = GROUNDED_PROMPT | llm | StrOutputParser()
+                yield f'data: {json.dumps({"type":"sources","data":sources})}\n\n'
+
+                full_answer = ""
+                async for token in chain.astream(
+                    {"context": context, "question": req.message, "history": history}
+                ):
+                    full_answer += token
+                    yield f'data: {json.dumps({"type":"token","data":token})}\n\n'
+
+                if docs and REFUSAL not in full_answer:
+                    grounded = await is_grounded(llm, context, full_answer)
+                    yield f'data: {json.dumps({"type":"grounded","data":grounded})}\n\n'
+
+                return
+
+            # Step 2: Tool binding — LLM picks from MCP tools or answers directly
+            messages = [SystemMessage(content=_DIRECT_SYSTEM), *history, HumanMessage(content=req.message)]
+            resp = await _llm_with_tools.ainvoke(messages)
+
+            if not resp.tool_calls:
+                print(f"\n[ROUTER] → DIRECT  | query: {req.message!r}")
+                # No tool needed — direct conversational answer
                 yield f'data: {json.dumps({"type":"sources","data":[]})}\n\n'
-                async for chunk in llm.astream([
-                    SystemMessage(content=_DIRECT_SYSTEM),
-                    *history,
-                    HumanMessage(content=req.message),
-                ]):
+                async for chunk in llm.astream(messages):
                     if chunk.content:
                         yield f'data: {json.dumps({"type":"token","data":chunk.content})}\n\n'
                 return
 
-            # Rewrite follow-up questions into standalone queries before retrieval
-            query = req.message
-            if history:
-                try:
-                    result = await llm.ainvoke([
-                        SystemMessage(content=_CONDENSE_SYSTEM),
-                        *history,
-                        HumanMessage(content=req.message),
-                    ])
-                    query = result.content.strip() or req.message
-                except Exception:
-                    query = req.message
+            # Execute the tool the LLM chose — runs inside mcp_server.py subprocess
+            tool_call = resp.tool_calls[0]
+            print(f"\n[ROUTER] → MCP tool: {tool_call['name']}  | args: {tool_call['args']}")
+            chosen_tool = _tool_map[tool_call["name"]]
+            tool_result = await chosen_tool.ainvoke(tool_call["args"])
 
-            docs = await retriever.ainvoke(query)
-            context = format_context(docs) if docs else ""
-            sources = sorted({d.metadata.get("source", "?") for d in docs}) if docs else []
+            yield f'data: {json.dumps({"type":"sources","data":[]})}\n\n'
 
-            chain = GROUNDED_PROMPT | llm | StrOutputParser()
-            yield f'data: {json.dumps({"type":"sources","data":sources})}\n\n'
-
-            full_answer = ""
-            async for token in chain.astream(
-                {"context": context, "question": req.message, "history": history}
-            ):
-                full_answer += token
-                yield f'data: {json.dumps({"type":"token","data":token})}\n\n'
-
-            # Only verify faithfulness when we retrieved docs and got a real answer
-            if docs and REFUSAL not in full_answer:
-                grounded = await is_grounded(llm, context, full_answer)
-                yield f'data: {json.dumps({"type":"grounded","data":grounded})}\n\n'
+            # Pass tool result back to LLM and stream the final answer
+            async for chunk in llm.astream([
+                *messages,
+                resp,
+                ToolMessage(content=str(tool_result), tool_call_id=tool_call["id"]),
+            ]):
+                if chunk.content:
+                    yield f'data: {json.dumps({"type":"token","data":chunk.content})}\n\n'
 
         except Exception as exc:
             yield f'data: {json.dumps({"type":"error","data":str(exc)})}\n\n'

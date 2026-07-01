@@ -18,7 +18,7 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 
-from embeddings import Qwen3Embeddings
+from embeddings import DocumentEmbeddings
 
 _ROOT = Path(__file__).parent.parent
 PDF_DIR = _ROOT / "pdfs"
@@ -59,7 +59,7 @@ def main():
     chunks = load_and_chunk()
     print(f"\nEmbedding {len(chunks)} chunks (slow step, runs once)...")
 
-    emb = Qwen3Embeddings()
+    emb = DocumentEmbeddings()
 
     # Clear any existing vectors so re-running never creates duplicate chunks
     store = Chroma(

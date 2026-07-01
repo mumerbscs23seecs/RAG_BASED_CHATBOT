@@ -701,7 +701,7 @@ async function send() {
             body.appendChild(b);
             $('chatEl').scrollTop = $('chatEl').scrollHeight;
           } else if (evt.type === 'error') {
-            bubble.innerHTML = mdBot('**Something went wrong:** ' + evt.data);
+            bubble.innerHTML = md.render('**Something went wrong:** ' + evt.data);
             bubble.style.borderColor = '#fcd34d';
             $('chatEl').scrollTop = $('chatEl').scrollHeight;
           }
